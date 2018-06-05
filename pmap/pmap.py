@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # pmap.py version 2.0
 #        .ed"""" "^^^^**mu__
 #      -"                  ""*m__
