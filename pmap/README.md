@@ -1,14 +1,16 @@
+# Coded by Jesse Nebling (@bashexplode)
+
+#### Summary
+
 pmap.py utilizes the API from censys.io to pull open services from a repository of scans that are performed on a regular basis by the University of Michigan, and shodan.io. This allows us to pull information on client resources without actively scanning them for the first few days of an external pentest, allowing for much greater stealth and a lesser likelihood of being caught by an IDS. Because the scans only cover the ports below, pmap.py is great for the start of external pentests, but if the results do not give a foothold it would be smart to still perform an nmap scan on ports outside of the censys.io scope.
 
-===========================================
+
 
 Censys.io ports: 21, 22, 23, 25, 53, 80, 102, 110, 143, 443, 465, 502, 993, 995, 1911, 7547, 20000, 47808
 
 Shodan.io ports: 21, 22, 23, 80, UDP:161, 443, 554, 5060, 8080, 8443
 
-===========================================
-
-Usage:
+#### Usage:
 
 python pmap.py [-h] (-q QUERY | -iL FILENAME) [-oA OUTPUTALL | -oS OUTPUTSTANDARD | -oC OUTPUTCSV | -oX OUTPUTNMAPXML] [-sV]
 
@@ -38,22 +40,14 @@ Parameters/Flags:
 
 -v : Verbose mode
 
-===========================================
 
-Requirements:
+#### Requirements:
 
 Your API keys for Shodan and Censys.io
 
 Python 3
 
-===========================================
 
-Suggested Improvements:
+#### License:
+This script is under the [BSD 3-Clause license](https://raw.githubusercontent.com/bashexplode/Invoke-LateralMovement/master/LICENSE).
 
-Please suggest more
-
-===========================================
-
-Authors:
-
-Jesse Nebling
