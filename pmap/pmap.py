@@ -117,7 +117,7 @@ class Shodan:
 class Censys:
     def __init__(self, ip, svclookup, iteration, proxyset):
 
-        # Set API URL and UID and SECRET API keys for PwC Security Research accounts (to deal with API limiting)
+        # Set API URL and UID and SECRET API keys for multiple accounts (to deal with API limiting)
         # This is a temporary workaround. Censys.io limits to 120 API calls every 5 minutes. Need to either create more
         # accounts for larger ranges or reach out to the Censys team and ask for a limit upgrade. The latter might be
         # difficult to make a case.
@@ -874,7 +874,7 @@ class Main():
 
         parser = argparse.ArgumentParser(description='Passive Service Discovery Search')
         maininput = parser.add_mutually_exclusive_group(required=True)
-        maininput.add_argument('-q', '--query', help='Censys Search Term (i.e. pwc.com, 192.168.1.1, 10.0.0.0/16)')
+        maininput.add_argument('-q', '--query', help='Censys Search Term (i.e. microsoft.com, 192.168.1.1, 10.0.0.0/16)')
         maininput.add_argument('-iL', '--filename', default=False, help='Passive Search with file (i.e. scope.txt)')
         output = parser.add_mutually_exclusive_group(required=False)
         output.add_argument('-oA', '--outputall', default=False, help='Outputs in all available formats')
@@ -884,9 +884,9 @@ class Main():
                             help='Outputs into a nmap style .xml file (for simplified msf db_import)')
         parser.add_argument('-sV', '--servicelookup', default=False, action='store_true',
                             help='Checks for additional details about open ports')
-        # adding proxy option to test within PwC offices (Shodan cert not trusted by PwC)
+        # adding proxy option to test 
         parser.add_argument('-p', '--proxy', default=False, help='Specify SOCKS5 proxy (i.e. 127.0.0.1:8123)')
-        # adding proxy option to test within PwC offices (Shodan cert not trusted by PwC)
+        # adding proxy option to test 
         parser.add_argument('-v', '--verbose', default=False, action='store_true', help='Output in verbose mode while script runs')
         # threads plz
         parser.add_argument('-T', '--threads', default=1, help='Specify how many threads to use. [Default = 1]')
