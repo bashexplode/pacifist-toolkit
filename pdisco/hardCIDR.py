@@ -949,7 +949,7 @@ class Main:
                 break
 
         while True:
-            choice = raw_input("Does %s use any other alternative names? (i.e. PricewaterhouseCoopers, PwC) Y or N: " % self.clientname[0])
+            choice = raw_input("Does %s use any other alternative names? (i.e. Microsoft, MS) Y or N: " % self.clientname[0])
             if choice.lower() != 'y' and choice.lower() != 'n' and choice.lower() != 'yes' and choice.lower() != 'no':
                 print("[!] Please choose Y or N.")
             else:
