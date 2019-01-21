@@ -16,7 +16,7 @@ python pmap.py [-h] (-q QUERY | -iL FILENAME) [-oA OUTPUTALL | -oS OUTPUTSTANDAR
 
 Parameters/Flags:
 
--q <query> : A single query that can be an IP address, a hostname, or an IP range [e.g. 192..0.0.1, www.pwc.com, 192.0.0.0/24, 192.0.0.1 - 192.0.0.255]
+-q <query> : A single query that can be an IP address, a hostname, or an IP range [e.g. 192..0.0.1, www.microsoft.com, 192.0.0.0/24, 192.0.0.1 - 192.0.0.255]
 
 -iL <filename> : A list of queries from a file with above queries separated by new lines. [works best with CIDR ranges because of API rate limits]
 
