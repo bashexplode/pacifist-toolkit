@@ -10,6 +10,7 @@ sublist3r.py is a subdomain lookup script created by @aboul3la from www.secgeek.
 
 pdnslookup.py is a threaded DNS lookup tool that is used to validate subdomains discovered by sublist3r.py
 
+
 #### Usage:
 
 python pdisco.py [-h] [-v] [-r] [-l] [-f] [-p] [-a] [-A] [-u] [-T THREADS]
@@ -44,6 +45,8 @@ A flavor of Unix that has the whois binary.
 Python 3
 
 Everything in the requirements.txt file
+
+##### if you are using a new version of openSSL you may need to downgrade. here's an easy script to do so: https://gist.github.com/bmaupin/8caca3a1e8c3c5686141
 
 
 #### Suggested Improvements:
