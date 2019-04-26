@@ -47,6 +47,8 @@ Your API keys for Shodan and Censys.io
 
 Python 3
 
+##### if you are using a new version of openSSL you may need to downgrade. here's an easy script to do so: https://gist.github.com/bmaupin/8caca3a1e8c3c5686141
+
 
 #### License:
 This script is under the [BSD 3-Clause license](https://raw.githubusercontent.com/bashexplode/Invoke-LateralMovement/master/LICENSE).
