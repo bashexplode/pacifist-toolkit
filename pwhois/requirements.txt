@@ -1,0 +1,5 @@
+netaddr
+dnspython
+urllib
+telnetlib
+python-whois
