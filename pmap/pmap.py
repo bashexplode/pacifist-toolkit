@@ -1,28 +1,6 @@
 #!/usr/bin/env python
 # pmap.py version 2.0
-#        .ed"""" "^^^^**mu__
-#      -"                  ""*m__
-#    ."             mwu___      "Ns
-#   /               ug___"9*u_     "q_
-#  d  3             ,___"9*u_"9w_    "u_
-#  $  *             ,__"^m,_"*s_"q_    9_
-# .$  ^c            __"9*,_"N_ 9u "s    "M
-# d$L  4.           ""^m__"q_"*_ 4_ b    `L
-# $$$$b ^ceeeee.    "*u_ 9u "s ?p 0_ b    9p
-# $$$$P d$$$$F $ $  *u_"*_ 0_`k 9p # `L    #
-# 3$$$F "$$$$b   $  s 5p 0  # 7p # ]r #    0
-#  $$P"  "$$b   .$  `  B jF 0 jF 0 jF 0    t
-#   *c    ..    $$     " d  @ jL # jL #    d
-#     %ce""    $$$  m    " d _@ jF 0 jF    0
-#      *$e.    ***  jm*      # jF g" 0    jF
-#       $$$      4  __a*" _    " J" 0     @
-#      $"'$=e....$  "__a*^"_s   " jP    _0
-#      $  *=%4.$ L  ""__a*@"_w-        j@
-#      $   "%*ebJL  """__a*^"_a*     _p"
-#       %..      4  ^^""___m*"     _y"
-#        $$$e   z$  e*^F""      __*"
-#         "*$c  "$          __a*"
-#           """*$$______aw*^""
+
 # Pacifist Toolkit by Jesse Nebling (@bashexplode)
 # Censys, sanitization, output, and execution functions created by Jesse Nebling (@bashexplode)
 # Original Shodan function created by Max Arthur
@@ -43,6 +21,7 @@ import threading
 
 init(autoreset=True)
 screenlock = threading.Semaphore(value=1)
+combined_results = {}
 
 class Shodan:
     def __init__(self, ip, svclookup, proxyset):
@@ -728,7 +707,7 @@ class CSVout:
         self.f = None
 
     def quote(self, value):
-        if not isinstance(value, str) or not isinstance(value, unicode):
+        if not isinstance(value, str):
             value = str(value)
         return self.QUOTE + value + self.QUOTE
 
@@ -1074,10 +1053,37 @@ class Main():
         if self.query:
             self.execute(self.query)
 
+    def banner(self):
+        print("""
+           .ed'''''' "^^^^**mu__
+         -"                  ""*m__
+       ."             mwu___      "Ns
+      /               ug___"9*u_     "q_
+     d  3             ,___"9*u_"9w_    "u_
+     $  *             ,__"^m,_"*s_"q_    9_
+    .$  ^c            __"9*,_"N_ 9u "s    "M
+    d$L  4.           ''^m__"q_"*_ 4_ b    `L
+    $$$$b ^ceeeee.    "*u_ 9u "s ?p 0_ b    9p
+    $$$$P d$$$$F $ $  *u_"*_ 0_`k 9p # `L    #
+    3$$$F "$$$$b   $  s 5p 0  # 7p # ]r #    0
+     $$P"  "$$b   .$  `  B jF 0 jF 0 jF 0    t  Pacifist Toolkit
+      *c    ..    $$     " d  @ jL # jL #    d  pmap.py
+        %ce""    $$$  m    " d _@ jF 0 jF    0  Jesse Nebling (@bashexplode)
+         *$e.    ***  jm*      # jF g" 0    jF
+          $$$      4  __a*" _    " J" 0     @
+         $"'$=e....$  "__a*^"_s   " jP    _0
+         $  *=%4.$ L  ""__a*@"_w-        j@
+         $   "%*ebJL  '''__a*^"_a*     _p"
+          %..      4  ^^''__m*"     _y"
+           $$$e   z$  e*^F""      __*"
+            "*$c  "$          __a*"
+              '''*$$______aw*^''
+              """
+              )
+
 
 if __name__ == "__main__":
     try:
-        combined_results = {}  # Dict to consolidate host and port results from all modules
         Main()
     except KeyboardInterrupt:
         print("You killed it.")
