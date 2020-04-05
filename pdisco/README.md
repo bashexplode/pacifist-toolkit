@@ -4,7 +4,7 @@
 
 pdisco.py is a passive discovery OSINT script that takes public information from sources such as the differnt whois RIR databases (ARIN, APNIC, AfriNIC, RIPE, and LACNIC), Google, Yahoo, Bing, Baidu, Ask, Netcraft, Virustotal, ThreatCrowd, DNSdumpster, and ReverseDNS. To do this pdisco.py utilizes hardCIDR.py, sublist3r.py, a custom pdnslookup.py script, runs through each functionality, stores the data from each into dictionaries and then outputs all of the information into a footprint Excel document that can then be reviewed and given to a client.
 
-hardCIDR.py is the script that utilizes the whois databases through both the whois binary that comes with Kali, as well as web API calls and BGP router lookups. This is a python version of the script hardCIDR.sh by @ninewires from TrustedSec. Additional functionality such as threading was added to this python version.
+pwhois.py utilizes the whois databases through the python-whois library, as well as web API calls and BGP router lookups. Inspired by hardCIDR.sh by @ninewires from TrustedSec. Additional functionality such as threading was added to this python version.
 
 sublist3r.py is a subdomain lookup script created by @aboul3la from www.secgeek.net.
 
@@ -40,8 +40,6 @@ Parameters/Flags:
 
 #### Requirements:
 
-A flavor of Unix that has the whois binary.
-
 Python 3
 
 Everything in the requirements.txt file
@@ -54,8 +52,6 @@ Everything in the requirements.txt file
 ASN BGP lookups don't give the network name. Not high priority, but the hardCIDR.py function needs to be reworked
 
 RIPE whois lookups are rate limited, so it may come back with blank organization and network names. There is a link provided in the second to last column, click it and enter the info manually. 
-
-Requires linux because of the whois binary usage. Will eventually make a fully python version.
 
 #### License:
 This script is under the [BSD 3-Clause license](https://raw.githubusercontent.com/bashexplode/Invoke-LateralMovement/master/LICENSE).
