@@ -3,3 +3,4 @@ xlsxwriter
 dnspython
 requests
 telnetlib
+python-whois

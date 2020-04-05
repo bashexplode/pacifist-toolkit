@@ -15,37 +15,145 @@
 # directly. The entire DB as been downloaded to a separate file for queries to this RIR.
 # The file will be periodically updated to maintain accurate information.
 #
-# Output saved to two csv files - one for org & one for PoCs
-# A txt file is also output with a full list of enumerated CIDRs
+# Output saved to a csv file
 #
 # Author: Jesse Nebling (@bashexplode)
 
-from __future__ import print_function
+import whois
 import sys
 import argparse
-import os
-import urllib
-import subprocess
-import time
-import re
-from netaddr import *
-import random
-import telnetlib
-import socket
 from multiprocessing.dummy import Pool as ThreadPool
 import threading
+import re
+import urllib.error as HTTPError
+import urllib.request as urllib
+from netaddr import *
+import random
+import socket
+import telnetlib
+import time
+import os
 
 screenlock = threading.Semaphore(value=1)
 combined_whoisresults = {}  # Dict to consolidate results from all modules
+verbose = False
 
+def existcheck(inetnumurl, verbose):
+    exists = False
+    for iprange in list(combined_whoisresults):
+        if combined_whoisresults[iprange]["inetnumurl"] == inetnumurl:
+            exists = True
+            if verbose:
+                screenlock.acquire()
+                print("\t[!] %s already exists in the data dictionary. Skipping lookup" % inetnumurl)
+                screenlock.release()
+    return exists
 
-def cmdline(command):  # was annoyed at os.system output so pulled this
-    process = subprocess.Popen(
-        args=command,
-        stdout=subprocess.PIPE,
-        shell=True
-    )
-    return process.communicate()[0]
+def whoistrycatch(query, whoisurl):
+    whoisclient = whois.NICClient()
+    try:
+        whoisdata = whoisclient.whois(query, whoisurl, 0).split('\n')
+        return whoisdata
+    except (ConnectionResetError, socket.timeout, socket.error):
+        try:
+            time.sleep(5)
+            whoisdata = whoisclient.whois(query, whoisurl, 0).split('\n')
+            return whoisdata
+        except (ConnectionResetError, socket.timeout, socket.error):
+            try:
+                time.sleep(5)
+                whoisdata = whoisclient.whois(query, whoisurl, 0).split('\n')
+                return whoisdata
+            except (ConnectionResetError, socket.timeout, socket.error):
+                print("[!] Failed whois connection 3 times, sorry")
+
+def urlopentrycatch(link):
+    try:
+        response = urllib.urlopen(link)
+        responsedecode = response.read().decode('utf-8')
+        try:
+            response.close()
+        except NameError or AttributeError:
+            pass
+        return responsedecode
+    except HTTPError.HTTPError:
+        if verbose:
+            screenlock.acquire()
+            print("\t[-] 404 error for: %s" % link)
+            screenlock.release()
+        return None
+    except HTTPError.URLError:
+        time.sleep(5)
+        try:
+            response = urllib.urlopen(link)
+            responsedecode = response.read().decode('utf-8')
+            try:
+                response.close()
+            except NameError or AttributeError:
+                pass
+            return responsedecode
+        except HTTPError.HTTPError:
+            if verbose:
+                screenlock.acquire()
+                print("\t[-] 404 error for: %s" % link)
+                screenlock.release()
+            return None
+        except HTTPError.URLError:
+            time.sleep(5)
+            try:
+                response = urllib.urlopen(link)
+                responsedecode = response.read().decode('utf-8')
+                try:
+                    response.close()
+                except NameError or AttributeError:
+                    pass
+                return responsedecode
+            except HTTPError.HTTPError:
+                if verbose:
+                    screenlock.acquire()
+                    print("\t[-] 404 error for: %s" % link)
+                    screenlock.release()
+                return None
+            except HTTPError.URLError:
+                print("\t[!] Tried to reconnect 3 times and failed, sorry")
+
+class BuildResultDict:
+    def __init__(self, cidr, inet, org, netname, inetnumurl, country, rir, email, verbose):
+        self.cidr = cidr
+        self.inet = inet
+        self.org = org
+        self.netname = netname
+        self.inetnumurl = inetnumurl
+        self.country = country
+        self.rir = rir
+        self.email = email
+        self.verbose = verbose
+
+    def build(self):
+        exists = False
+        for iprange in list(combined_whoisresults):
+            if IPNetwork(self.cidr) in IPNetwork(iprange):
+                exists = True
+
+        if self.email:
+            if self.cidr in list(combined_whoisresults):
+                combined_whoisresults[self.cidr]["email"] = self.email
+
+        if not exists:
+            combined_whoisresults[self.cidr] = {}
+            combined_whoisresults[self.cidr]["range"] = self.inet
+            combined_whoisresults[self.cidr]["org"] = self.org
+            combined_whoisresults[self.cidr]["netname"] = self.netname
+            combined_whoisresults[self.cidr]["inetnumurl"] = self.inetnumurl
+            combined_whoisresults[self.cidr]["country"] = self.country
+            combined_whoisresults[self.cidr]["rir"] = self.rir
+            if self.email:
+                combined_whoisresults[self.cidr]["email"] = self.email
+            else:
+                combined_whoisresults[self.cidr]["email"] = ""
+        else:
+            if self.verbose:
+                print("[!] %s already exists in the data dictionary." % self.cidr)
 
 
 class WhoISparser:
@@ -56,7 +164,7 @@ class WhoISparser:
         self.inetnumurl = inetnumurl
         self.rir = rir
         self.emaildomain = emaildomain
-        self.fullwhoisdata = None
+        self.fullwhoisdata = []
         self.netnamelist = []
         self.pool = pool
         self.emaillist = []
@@ -66,8 +174,11 @@ class WhoISparser:
         if self.verbose:
             print("[*] Enumerating CIDRs for %s Org Names via %s" % (self.name, self.rir))
 
-        self.fullwhoisdata = cmdline(
-            "whois -h %s '%s' | grep -v '%s' | sed 1,4d | sed '$d'" % (self.whoisurl, self.name, '%')).split('\n')
+        whoisdata = whoistrycatch(self.name, self.whoisurl)
+        for line in whoisdata:
+            if line and not re.match('^%', line):
+                self.fullwhoisdata.append(line)
+
         if 'No entries found' in self.fullwhoisdata:
             if self.verbose:
                 print("[-] No %s records found for %s." % (self.rir, self.name))
@@ -86,9 +197,13 @@ class WhoISparser:
             netname = None
             country = None
             email = None
-            singlewhoisdata = cmdline("whois -h %s '%s' | grep -v '%s'" % (self.whoisurl, inet, '%')).split('\n')
-            inetnumhtml = inet.replace(' ', '%20').replace('-', '%2D').replace(',', '%2C').replace('.',
-                                                                                                   '%2E').replace(
+            singlewhoisdata = []
+            whoisdata = whoistrycatch(inet, self.whoisurl)
+
+            for line in whoisdata:
+                if line and not re.match('^%', line):
+                    singlewhoisdata.append(line)
+            inetnumhtml = inet.replace(' ', '%20').replace('-', '%2D').replace(',', '%2C').replace('.', '%2E').replace(
                 '&', '%26')
             inetnumurl = self.inetnumurl.replace("{URLDATA}", inetnumhtml)
             for sline in singlewhoisdata:
@@ -132,9 +247,11 @@ class WhoISparser:
             self.sanilist.append(line.split()[1].rstrip())
 
     def emailexec(self, email):
-        self.fullwhoisdata = cmdline(
-            "whois -h %s -i ny '%s' | grep -v '%s' | sed 1,4d | sed '$d'" % (self.whoisurl, email, '%')).split(
-            '\n')
+        self.fullwhoisdata = []
+        whoisdata = whoistrycatch(email, self.whoisurl)
+        for line in whoisdata:
+            if line and not re.match('^%', line):
+                self.fullwhoisdata.append(line)
         self.pool.map(self.inetexec, self.fullwhoisdata)
 
     def emaillookup(self):
@@ -145,12 +262,6 @@ class WhoISparser:
                 self.emaillist.append(email)
 
         self.pool.map(self.emailexec, self.emaillist)
-
-    def netnamelookup(self):
-        for netname in self.netnamelist:
-            self.fullwhoisdata = cmdline(
-                "whois -h %s '%s' | grep -v '%s' | sed 1,4d | sed '$d'" % (self.whoisurl, netname, '%')).split('\n')
-            self.inetlookup()
 
 
 class RIPE:
@@ -185,7 +296,6 @@ class APNIC:
             whois.initializewhoisdata()
             whois.inetlookup()
             whois.emaillookup()
-            # whois.netnamelookup()
 
 
 class AfriNIC:
@@ -204,7 +314,6 @@ class AfriNIC:
             whois.initializewhoisdata()
             whois.inetlookup()
             whois.emaillookup()
-            # whois.netnamelookup()
 
 
 class LACNIC:
@@ -222,20 +331,21 @@ class LACNIC:
         for lookupitem in lookuplist:
             for index, line in enumerate(whoisdata):
                 if lookupitem.lower() in line.lower():
+
                     singlewhoisdata = []
                     org = None
                     netname = None
                     country = None
-                    if self.lutype == 'email':
-                        for x in range(1, 20):
-                            singlewhoisdata.append(whoisdata[index - x])
-                        for x in range(1, 10):
-                            singlewhoisdata.append(whoisdata[index + x])
-                    else:
-                        for x in range(1, 4):
-                            singlewhoisdata.append(whoisdata[index - x])
-                        for x in range(1, 9):
-                            singlewhoisdata.append(whoisdata[index + x])
+                    email = None
+                    singlewhoisdata.append(whoisdata[index])
+                    for x in range(1, 40):
+                        if '######################' in whoisdata[index - x]:
+                            break
+                        singlewhoisdata.append(whoisdata[index - x])
+                    for x in range(1, 40):
+                        if '######################' in whoisdata[index + x]:
+                            break
+                        singlewhoisdata.append(whoisdata[index + x])
 
                     for sline in singlewhoisdata:
                         if 'owner:' in sline:
@@ -245,9 +355,9 @@ class LACNIC:
                     for sline in singlewhoisdata:
                         if 'ownerid:' in sline:
                             netname = ' '.join(sline.split()[1:])
-                        if self.lutype == 'email':
-                            if ('@' + self.cemail).lower() in line.lower():
-                                email = sline.split()[1]
+                        if 'e-mail' in sline:
+                            email = re.findall(r'[A-Za-z0-9\-\.]{1,100}@[A-Za-z0-9\-\.]{1,30}\.[A-Za-z\.]{1,5}', sline)[
+                                0]
 
                     for sline in singlewhoisdata:
                         if 'country:' in sline:
@@ -270,37 +380,42 @@ class LACNIC:
                                 dictentry = BuildResultDict(cidr, inetnum, org, netname, inetnumurl, country, self.rir,
                                                             email, self.verbose)
                                 dictentry.build()
+
                     if self.lutype == 'asn':
                         url = "http://bgp.he.net/{URLDATA}#_asinfo"
 
                         try:
                             tn = telnetlib.Telnet(random.choice(self.routesrvs), '23', timeout=10)
-                            tn.write("show ip bgp regexp %s\n" % lookupitem[2:])
-                            tn.write("\n")
-                            tn.write("exit\n")
+                            tn.write(b"show ip bgp regexp %s\n" % lookupitem[2:].encode('ascii'))
+                            tn.write(b"\n")
+                            tn.write(b"\n")
+                            tn.write(b"exit\n")
                             telnetdata = tn.read_all().split()
-                            time.sleep(3)
+                            tn.close()
+                            time.sleep(2)
                             ranges = []
                             for ipadd in telnetdata:
                                 if re.match(r"^([0-9]{1,3}\.){3}[0-9]{1,3}\/([0-9]|[1-2][0-9]|3[0-2])?$",
-                                            ipadd) or re.match(
-                                        r"^i([0-9]{1,3}\.){3}[0-9]{1,3}\/([0-9]|[1-2][0-9]|3[0-2])?$", ipadd):
-                                    if 'i' in ipadd:
-                                        ranges.append(ipadd[1:])
+                                            ipadd.decode('utf-8')) or re.match(
+                                    r"^i([0-9]{1,3}\.){3}[0-9]{1,3}\/([0-9]|[1-2][0-9]|3[0-2])?$",
+                                    ipadd.decode('utf-8')):
+                                    if 'i' in ipadd.decode('utf-8'):
+                                        ranges.append(ipadd.decode('utf-8')[1:])
                                     else:
-                                        ranges.append(ipadd)
+                                        ranges.append(ipadd.decode('utf-8'))
 
                             if ranges:
+                                # get cidrs for each network
                                 for cidradd in ranges:
                                     cidr = cidradd
                                     inetnum = str(IPNetwork(cidr).network) + " - " + str(IPNetwork(cidr).broadcast)
-                                    inetnumhtml = lookupitem.replace(' ', '%20').replace('-', '%2D').replace(',',
-                                                                                                             '%2C').replace(
-                                        '.', '%2E').replace(
-                                        '&', '%26')
-                                    inetnumurl = url.replace("{URLDATA}", inetnumhtml)
+                                    asnhtml = lookupitem.replace(' ', '%20').replace('-', '%2D').replace(',',
+                                                                                                         '%2C').replace(
+                                        '.', '%2E').replace('&', '%26')
+                                    asnurl = url.replace("${asn}", asnhtml)
 
-                                    dictentry = BuildResultDict(cidr, inetnum, org, netname, inetnumurl, country, self.rir,
+                                    dictentry = BuildResultDict(cidr, inetnum, org, netname, asnurl, country,
+                                                                self.rir,
                                                                 email, self.verbose)
                                     dictentry.build()
                         except (socket.timeout, socket.error):
@@ -314,21 +429,20 @@ class LACNIC:
         for name in self.cname:
             if self.verbose:
                 print("[*] Enumerating CIDRs for %s Org Names via %s" % (name, self.rir))
-            with open(self.datafile) as f:
+            with open(self.datafile, encoding='ISO-8859-1') as f:
                 whoisdata = list(filter(None, f.read().split('\n')))
 
             owners = []
             inet = []
             asn = []
             emails = []
-            saniarray = []
 
             for line in whoisdata:
                 if 'owner:' in line:
                     if name.lower() in line.lower():
                         owners.append(line)
                 if ('@' + self.cemail).lower() in line.lower():
-                    emails.append(str(line.split()[1]))
+                    emails.append(re.findall(r'[A-Za-z0-9\-\.]{1,100}@[A-Za-z0-9\-\.]{1,30}\.[A-Za-z\.]{1,5}', line)[0])
 
             if owners or emails:
                 if self.verbose:
@@ -339,35 +453,23 @@ class LACNIC:
                             if owner.lower() in line.lower():
                                 for x in range(1, 5):
                                     if 'inetnum' in whoisdata[index - x]:
-                                        inet.append(line.strip()[1:])
+                                        inet.append(" ".join(whoisdata[index - x].split()[1:]))
                                     if 'aut-num' in whoisdata[index - x] and 'N/A' not in whoisdata[index - x]:
-                                        asn.append(line.strip()[1:])
+                                        asn.append(" ".join(whoisdata[index - x].split()[1:]))
 
                     if inet:
-                        for inetnum in inet:
-                            if inetnum not in saniarray:
-                                saniarray.append(inetnum)
-                        inet = saniarray
-                        saniarray = []
-
+                        inet = sorted(set(inet))
                         self.lutype = 'inetnum'
                         # query by inetnum
                         self.singlelookup(whoisdata, inet)
 
                     if asn:
-                        for asnnum in asn:
-                            if asnnum not in saniarray:
-                                saniarray.append(asnnum)
-                        asn = saniarray
-                        saniarray = []
+                        asn = sorted(set(asn))
                         self.lutype = 'asn'
                         self.singlelookup(whoisdata, asn)
 
                 if emails:
-                    for email in emails:
-                        if email not in saniarray:
-                            saniarray.append(email)
-                    emails = saniarray
+                    emails = sorted(set(emails))
                     self.lutype = 'email'
                     self.singlelookup(whoisdata, emails)
 
@@ -395,6 +497,7 @@ class LACNICupdate():
         self.datafile = datafile
         self.datafilebu = datafilebu
         self.verbose = verbose
+        self.whoisname = "whois.lacnic.net"
 
     def u_term(self):
         print("[!] Caught ctrl+c, removing all tmp files and restoring old data file.")
@@ -416,7 +519,9 @@ class LACNICupdate():
         # Get all assigned/allocated ranges
         if self.verbose:
             print("[*] Downloading LACNIC delegation list.")
-        fulldata = urllib.urlopen("http://ftp.lacnic.net/pub/stats/lacnic/delegated-lacnic-latest")
+
+        response = urlopentrycatch("http://ftp.lacnic.net/pub/stats/lacnic/delegated-lacnic-latest")
+        fulldata = response.split('\n')
         cleandata = []
         for line in fulldata:
             if "assigned" or "allocated" in line:
@@ -431,10 +536,13 @@ class LACNICupdate():
         for index, irange in enumerate(cleandata):
             with open(self.datafile, "a") as f:
                 f.write("\nRange=%s" % irange)
-                whoisdata = cmdline(
-                    "whois -h whois.lacnic.net '%s' | grep -v '%s' | sed 1,4d | sed '$d'" % (irange, '%')).split('\n')
-                for line in whoisdata:
-                    f.write(line + '\n')
+                if self.verbose:
+                    print("[*] Pulling base whois data for %s via LACNIC" % irange)
+                lacnicwhoisdata = whoistrycatch(irange, self.whoisname)
+
+                for line in lacnicwhoisdata:
+                    if line and not re.match('^\%', line):
+                        f.write(line + '\n')
                 f.write("\n################################################################################\n")
                 print("[*] %s of %s ranges complete." % (index, total))
             time.sleep(4)
@@ -450,7 +558,6 @@ class ARIN:
         self.cname = cname
         self.whoisname = "whois.arin.net"
         self.rir = "ARIN"
-        self.inetnumurl = "http://www.afrinic.net/en/services/whois-query/{URLDATA}"
         self.cemail = cemail
         self.countrycodes = ["AX", "AF", "AL", "DZ", "AS", "AD", "AO", "AI", "AQ", "AG", "AR", "AM", "AW", "AU",
                              "AT", "AZ", "BS", "BH", "BD", "BB", "BY", "BE", "BZ", "BJ", "BM", "BT", "BO", "BQ", "BA",
@@ -474,192 +581,199 @@ class ARIN:
         self.pool = pool
         self.asns = []
         self.country = 'US'
+        self.emails = []
 
-    def orgsearch(self, orgs):
-        org = orgs.split('"')[3]
-        orghandle = orgs.split('"')[1]
-        netname = None
+    def orgsearch(self, orgid):
         # get list of org networks
         orglinks = []
-        fulldata = urllib.urlopen("http://whois.arin.net/rest/org/%s/nets" % orghandle)
-        for line in fulldata:
-            fulldata = line.split("<")
-            for xline in fulldata:
-                if "/rest/net/" in xline:
-                    orglinks.append(xline.split(">")[1] + ".txt")
+        try:
+            response = urlopentrycatch("http://whois.arin.net/rest/org/%s/nets" % orgid)
+            if response is None:
+                return
+
+            for orglink in re.findall(r'https://whois\.arin\.net/rest/net/[A-Z0-9a-z\-]{0,30}', response):
+                insecurelink = re.sub(r'https://', "http://", orglink)
+                orglinks.append(insecurelink + ".txt")
+        except HTTPError.HTTPError as e:
+            if self.verbose:
+                screenlock.acquire()
+                print("\t[-] 404 error retrieving network range for OrgID %s" % orgid)
+                screenlock.release()
 
         # pull ASNs for later
-        fulldata = urllib.urlopen("http://whois.arin.net/rest/org/%s/asns" % orghandle)
-        for line in fulldata:
-            fulldata = line.split("<")
-            for xline in fulldata:
-                if "/rest/asn/" in xline:
-                    self.asns.append(xline.split(">")[1])
+        try:
+            response = urlopentrycatch("http://whois.arin.net/rest/org/%s/asns" % orgid)
+            if response is None:
+                return
+
+            for asnlink in re.findall(r'https://whois\.arin\.net/rest/asn/AS[0-9]{0,8}', response):
+                insecurelink = re.sub(r'https://', "http://", asnlink)
+                self.asns.append(insecurelink)
+        except HTTPError.HTTPError as e:
+            if self.verbose:
+                screenlock.acquire()
+                print("\t[-] 404 error retrieving ASN for OrgID %s" % orgid)
+                screenlock.release()
 
         for orglink in orglinks:
             # get cidrs for each network
-            fulldata = urllib.urlopen(orglink)
-            xdata = []
-            for line in fulldata:
-                xdata.append(line.split('\n')[0])
-            for xline in xdata:
-                if 'NetName' in xline:
-                    if len(xline.split()) > 2:
-                        netname = xline.split()[1:]
-                    else:
-                        netname = xline.split()[1]
-                if 'Organization' in xline:
-                    org = ' '.join(xline.split()[1:])
-            for xline in xdata:
-                if 'CIDR' in xline:
-                    cidrs = xline.replace(',', '').split()[1:]
-                    for cidr in cidrs:
-                        if '/32' in cidr:
-                            inetnum = str(IPNetwork(cidr).network)
-                        else:
-                            inetnum = str(IPNetwork(cidr).network) + " - " + str(IPNetwork(cidr).broadcast)
-                        dictentry = BuildResultDict(cidr, inetnum, org, netname, orglink, self.country,
-                                                    self.rir, None, self.verbose)
-                        dictentry.build()
+            self.restnetlookup(orglink, None, "OrgID", orgid)
 
-    def custsearch(self, custs):
-        # cust = custs.split('"')[3]\
-        cust = None
-        custhandle = custs.split('"')[1]
-        netname = None
-        inetnum = None
-        cidr = None
-        # get list of org networks
-        custlinks = []
-        fulldata = urllib.urlopen("http://whois.arin.net/rest/customer/%s/nets" % custhandle)
-        for line in fulldata:
-            fulldata = line.split("<")
-            for xline in fulldata:
-                if "/rest/net/" in xline:
-                    custlinks.append(xline.split(">")[1] + ".txt")
+    def custsearch(self, customer):
+        rgx = re.compile('[()]')
+        netname = rgx.sub('', re.findall(r'\([A-Z0-9-]{1,30}\)', customer)[1])
+        inetnum = re.findall(r'[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}.*', customer)[0]
+        cidr = str(IPRange(inetnum.split()[0], inetnum.split()[2]).cidrs()[0])
+        cust = re.findall(r'^.*\(C[0-9]{1,15}\)', customer)[0]
+        custlink = ("https://whois.arin.net/rest/net/%s.txt" % netname)
+        dictentry = BuildResultDict(cidr, inetnum, cust, netname, custlink, self.country,
+                                    self.rir, None, self.verbose)
+        dictentry.build()
 
-        for custlink in custlinks:
-            # get cidrs for each network
-            fulldata = urllib.urlopen(custlink)
-            xdata = []
-            for line in fulldata:
-                xdata.append(line.split('\n')[0])
-            for xline in xdata:
-                if 'NetName' in xline:
-                    if len(xline.split()) > 2:
-                        netname = xline.split()[1:]
-                    else:
-                        netname = xline.split()[1]
-                if 'Customer' in xline:
-                    cust = ' '.join(xline.split()[1:])
-            for yline in xdata:
-                if 'CIDR' in yline and 'NetName' not in yline and 'Parent' not in yline:
-                    cidrs = yline.replace(',', '').split()[1:]
-                    for cidr in cidrs:
-                        if '/32' in cidr:
-                            inetnum = str(IPNetwork(cidr).network)
-                        else:
-                            inetnum = str(IPNetwork(cidr).network) + " - " + str(IPNetwork(cidr).broadcast)
-                        dictentry = BuildResultDict(cidr, inetnum, cust, netname, custlink, self.country,
-                                                    self.rir, None, self.verbose)
-                        dictentry.build()
+    def restnetlookup(self, link, email, origin, originid):
+        try:
+            if existcheck(link, self.verbose):
+                return
+            # Keep getting TLS connection errors on Windows
+            insecurelink = re.sub(r'https://', "http://", link)
+            response = urlopentrycatch(insecurelink)
+            if response is None:
+                return
 
-    def emailsearch(self, pochandle):
-        neturls = []
-        orgurls = []
-        netname = None
-        org = None
-        email = None
-        country = self.country
-        pocs = []
-        urlstream = urllib.urlopen("https://whois.arin.net/rest/poc/%s.txt" % pochandle)
-        for line in urlstream:
-            pocs.append(line)
-        if pocs:
-            for xline in pocs:
-                if 'Country' in xline:
-                    country = xline.split()[1]
-                if 'Email' in xline:
-                    email = xline.split()[1]
-            urldata = urllib.urlopen("https://whois.arin.net/rest/poc/%s/nets" % pochandle)
-            for yline in urldata:
-                urldata = yline.split("<")
-            if len(urldata) > 2:
+            netname = re.findall(r'NetName:.*', response)[0].split()[1]
+            org = " ".join(re.findall(r'Organization:.*', response)[0].split()[1:])
+            cidrs = re.findall(r'[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\/[0-9]{1,2}', response)
+            for cidr in cidrs:
+                if '/32' in cidr:
+                    inetnum = str(IPNetwork(cidr).network)
+                else:
+                    inetnum = str(IPNetwork(cidr).network) + " - " + str(IPNetwork(cidr).broadcast)
+                dictentry = BuildResultDict(cidr, inetnum, org, netname, link, self.country,
+                                            self.rir, email, self.verbose)
+                dictentry.build()
+
+        except HTTPError.HTTPError as e:
+            if self.verbose:
                 screenlock.acquire()
-                print("\t\t[+] Found network ranges related to the email: %s." % email)
+                print("\t[-] 404 error retrieving CIDRs for %s %s" % origin, originid)
                 screenlock.release()
-                for zline in urldata:
-                    if "handle" in zline:
-                        neturls.append(zline.split(">")[1])
-                for netlink in neturls:
-                    netdata = urllib.urlopen(netlink + ".txt")
-                    singlelookup = []
-                    for line in netdata:
-                        singlelookup.append(line.replace('\n', ''))
-                    for xline in singlelookup:
-                        if 'NetName' in xline:
-                            if len(xline.split()) > 2:
-                                netname = xline.split()[1:]
-                            else:
-                                netname = xline.split()[1]
-                        if 'Organization' in xline:
-                            org = ' '.join(xline.split()[1:])
-                    for xline in singlelookup:
-                        if 'CIDR' in xline:
-                            cidrs = xline.replace(',', '').split()[1:]
-                            for cidr in cidrs:
-                                inetnum = str(IPNetwork(cidr).network) + " - " + str(
-                                    IPNetwork(cidr).broadcast)
-                                dictentry = BuildResultDict(cidr, inetnum, org, netname, netlink,
-                                                            country, self.rir, email, self.verbose)
-                                dictentry.build()
-            else:
-                if self.verbose:
-                    screenlock.acquire()
-                    print("\t\t[-] No network ranges related to the email %s." % email)
-                    screenlock.release()
 
-            urldata = urllib.urlopen("https://whois.arin.net/rest/poc/%s/orgs" % pochandle)
-            for yline in urldata:
-                urldata = yline.split("<")
-            if len(urldata) > 2:
+    def emailsearch(self, poclink):
+        pochandle = re.findall(r'[A-Za-z0-9\-\ ]{0,30}$', poclink)[0]
+
+        try:
+            response = urlopentrycatch(poclink)
+            if response is None:
+                return
+
+            email = re.findall(r'[A-Za-z0-9\-\.]{0,30}@[A-Za-z0-9\-\.]{0,30}', response)[0]
+
+            try:
+                response = urlopentrycatch("http://whois.arin.net/rest/poc/%s/nets" % pochandle)
+                if response is None:
+                    return
+
+                if response:
+                    if self.verbose:
+                        screenlock.acquire()
+                        print("\t[+] Found network ranges related to the email: %s." % email)
+                        screenlock.release()
+                    for netlink in re.findall(r'https://whois\.arin\.net/rest/net/[A-Z0-9a-z\-]{0,30}', response):
+                        insecurelink = re.sub(r'https://', "http://", netlink)
+                        self.restnetlookup(insecurelink + '.txt', email, "net lookup POC email", email)
+
+                else:
+                    if self.verbose:
+                        screenlock.acquire()
+                        print("\t[-] No network ranges related to the email %s." % email)
+                        screenlock.release()
+            except HTTPError.HTTPError as e:
+                if self.verbose:
+                    print("\t[-] 404 error retrieving CIDRs for POC %s" % pochandle)
+
+            try:
+                response = urlopentrycatch("http://whois.arin.net/rest/poc/%s/orgs" % pochandle)
+                if response is None:
+                    return
+
                 if self.verbose:
                     screenlock.acquire()
-                    print("\t\t[+] Found Orgs related to the email %s." % email)
+                    print("\t[+] Found Orgs related to the email %s." % email)
                     screenlock.release()
-                for zline in urldata:
-                    if "handle" in zline:
-                        orgurls.append(zline.split(">")[1])
-                for orglink in orgurls:
-                    orgdata = urllib.urlopen(orglink + ".txt")
-                    singlelookup = []
-                    for line in orgdata:
-                        singlelookup.append(line.replace('\n', ''))
-                    for xline in singlelookup:
-                        if 'NetName' in xline:
-                            if len(xline.split()) > 2:
-                                netname = xline.split()[1:]
-                            else:
-                                netname = xline.split()[1]
-                        if 'Organization' in xline:
-                            org = ' '.join(xline.split()[1:])
-                    for xline in singlelookup:
-                        if 'CIDR' in xline:
-                            cidrs = xline.replace(',', '').split()[1:]
-                            for cidr in cidrs:
-                                if '/32' in cidr:
-                                    inetnum = str(IPNetwork(cidr).network)
-                                else:
-                                    inetnum = str(IPNetwork(cidr).network) + " - " + str(
-                                        IPNetwork(cidr).broadcast)
-                                dictentry = BuildResultDict(cidr, inetnum, org, netname,
-                                                            orglink, country, self.rir, email, self.verbose)
-                                dictentry.build()
+                orglinks = re.findall(r'https://whois\.arin\.net/rest/org/[A-Z0-9a-z\-]{0,30}', response)
+                orglinks = sorted(set(orglinks))
+
+                for orglink in orglinks:
+                    try:
+                        orglink = re.sub(r'https://', "http://", orglink)
+                        response = urlopentrycatch(orglink + "/nets")
+                        if response is None:
+                            return
+
+                        for netlink in re.findall(r'https://whois\.arin\.net/rest/net/[A-Z0-9a-z\-]{0,30}',
+                                                  response):
+                            insecurelink = re.sub(r'https://', "http://", netlink)
+                            self.restnetlookup(insecurelink + '.txt', email, "org lookup POC email", email)
+                    except HTTPError.HTTPError as e:
+                        if self.verbose:
+                            screenlock.acquire()
+                            print("\t[-] 404 error retrieving network range for orgs related to POC %s" % email)
+                            screenlock.release()
+
+                    # pull ASNs for later
+                    try:
+                        response = urlopentrycatch(orglink + "/asns")
+                        if response is None:
+                            return
+
+                        for asnlink in re.findall(r'https://whois\.arin\.net/rest/asn/AS[0-9]{0,8}', response):
+                            insecurelink = re.sub(r'https://', "http://", asnlink)
+                            self.asns.append(insecurelink)
+                    except HTTPError.HTTPError as e:
+                        if self.verbose:
+                            screenlock.acquire()
+                            print("\t[-] 404 error retrieving ASN for orgs related to POC %s" % email)
+                            screenlock.release()
+
+                else:
+                    if self.verbose:
+                        screenlock.acquire()
+                        print("\t[-] No Orgs related to the email %s." % email)
+                        screenlock.release()
+            except HTTPError.HTTPError as e:
+                if self.verbose:
+                    print("\t[-] 404 error retrieving Orgs for POC %s" % pochandle)
+
+        except HTTPError.HTTPError as e:
+            if self.verbose:
+                screenlock.acquire()
+                print("\t[-] 404 error retrieving CIDRs for POC %s" % pochandle)
+                screenlock.release()
+
+    def threadedemails(self, emaildomain):
+        try:
+            response = urlopentrycatch("http://whois.arin.net/rest/pocs;domain=@%s*" % emaildomain)
+            if response is None:
+                return
+
+            poclinks = []
+            for poclink in re.findall(r'https://whois\.arin\.net/rest/poc/[A-Za-z0-9\-]{0,30}', response):
+                insecurelink = re.sub(r'https://', "http://", poclink)
+                poclinks.append(insecurelink)
+
+            # validate email domains
+            if poclinks:
+                if self.verbose:
+                    print("\t[+] Found ARIN email Records for @%s." % emaildomain)
+                self.pool.map(self.emailsearch, poclinks)
             else:
                 if self.verbose:
-                    screenlock.acquire()
-                    print("\t\t[-] No Orgs related to the email %s." % email)
-                    screenlock.release()
+                    print("[-] No ARIN Records found for %s." % emaildomain)
+        except HTTPError.HTTPError as e:
+            if self.verbose:
+                screenlock.acquire()
+                print("\t[-] 404 error retrieving POCs for email domain %s" % emaildomain)
+                screenlock.release()
 
     def runemails(self):
         # ARIN - get poc handle based on email domain
@@ -675,63 +789,104 @@ class ARIN:
                     emails.append(self.cemail.split('.')[0] + "." + ccode.lower())
                     emails.append(self.cemail.split('.')[0] + ".co." + ccode.lower())
 
-        for emaildomain in emails:
-            cleandata = []
-            fulldata = urllib.urlopen("http://whois.arin.net/rest/pocs;domain=@%s*" % emaildomain)
-            for line in fulldata:
-                fulldata = line.split("<")
-                for xline in fulldata:
-                    if "pocRef handle" in xline:
-                        cleandata.append(xline.split('"')[1])
+        self.pool.map(self.threadedemails, emails)
 
-            # validate email domains
-            if cleandata:
+    def asnlinklookup(self, asnlink):
+        netname = None
+        email = None
+        url = "http://bgp.he.net/${asn}#_asinfo"
+
+        try:
+            response = urlopentrycatch(asnlink)
+            if response is None:
+                return
+
+            asn = re.findall(r'AS[0-9]{1,10}', response)[0]
+            asnnum = asn[2:]
+            org = re.findall(r'name\=\"[A-Za-z0-9\ \,\-\.]{1,100}\"', response)[0].split('"')[1]
+            try:
+                tn = telnetlib.Telnet(random.choice(self.routesrvs), '23', timeout=10)
+                tn.write(b"show ip bgp regexp %s\n" % asnnum.encode('ascii'))
+                tn.write(b"\n")
+                tn.write(b"\n")
+                tn.write(b"exit\n")
+                telnetdata = tn.read_all().split()
+                tn.close()
+                time.sleep(2)
+                ranges = []
+                for ipadd in telnetdata:
+                    if re.match(r"^([0-9]{1,3}\.){3}[0-9]{1,3}\/([0-9]|[1-2][0-9]|3[0-2])?$",
+                                ipadd.decode('utf-8')) or re.match(
+                        r"^i([0-9]{1,3}\.){3}[0-9]{1,3}\/([0-9]|[1-2][0-9]|3[0-2])?$", ipadd.decode('utf-8')):
+                        if 'i' in ipadd.decode('utf-8'):
+                            ranges.append(ipadd.decode('utf-8')[1:])
+                        else:
+                            ranges.append(ipadd.decode('utf-8'))
+
+                if ranges:
+                    # get cidrs for each network
+                    for cidradd in ranges:
+                        cidr = cidradd
+                        inetnum = str(IPNetwork(cidr).network) + " - " + str(IPNetwork(cidr).broadcast)
+                        asnhtml = asn.replace(' ', '%20').replace('-', '%2D').replace(',', '%2C').replace(
+                            '.', '%2E').replace('&', '%26')
+                        asnurl = url.replace("${asn}", asnhtml)
+
+                        dictentry = BuildResultDict(cidr, inetnum, org, netname, asnurl, self.country, self.rir,
+                                                    email, self.verbose)
+                        dictentry.build()
+            except (socket.timeout, socket.error):
                 if self.verbose:
-                    print("\t[+] Found ARIN email Records for @%s." % emaildomain)
-                self.pool.map(self.emailsearch, cleandata)
-            else:
-                if self.verbose:
-                    print("[-] No ARIN Records found for %s." % emaildomain)
+                    screenlock.acquire()
+                    print("\t[!] Connection timed out or refused for ASN %s. Skipping." % asn)
+                    screenlock.release()
+                pass
+        except HTTPError.HTTPError as e:
+            if self.verbose:
+                screenlock.acquire()
+                print("\t[-] 404 error retrieving ASN information for %s" % asn)
+                screenlock.release()
 
     def run(self):
         for name in self.cname:
-            orghtml = name.replace(' ', '%20').replace('-', '%2D').replace(',', '%2C').replace('.', '%2E').replace(
-                '&', '%26')
+            orgitems = []
+            customeritems = []
+            if self.verbose:
+                print("[*] Pulling base whois data for %s via ARIN" % name)
+            querystring = name + "*"
+            arinwhoisdata = whoistrycatch(querystring, self.whoisname)
+
+            for line in arinwhoisdata:
+                if '(' in line:
+                    if '(C' in line:
+                        customeritems.append(line)
+                    else:
+                        orgitems.append(line)
+
+            rgx = re.compile('[()]')
+            orgids = []
+            for orgitem in orgitems:
+                orgids.append(rgx.sub('', re.findall(r'\(.*\)', orgitem)[0]))
 
             if self.verbose:
                 print("[*] Enumerating CIDRs for %s Org Handles via ARIN" % name)
 
-            # ARIN - get list of org networks
-            # get org handles
-            cleandata = []
-            fulldata = urllib.urlopen("http://whois.arin.net/rest/orgs;name=%s*" % orghtml)
-            for line in fulldata:
-                fulldata = line.split("<")
-                for xline in fulldata:
-                    if "/rest/org/" in xline:
-                        cleandata.append(xline)
-
-            if cleandata:
+            if orgids:
                 if self.verbose:
                     print("\t[+] Found Org Handles for %s" % name)
-                self.pool.map(self.orgsearch, cleandata)
+                self.pool.map(self.orgsearch, orgids)
             else:
                 if self.verbose:
                     print("\t[-] No Org Handles found for %s." % name)
 
             if self.verbose:
                 print("[*] Enumerating CIDRs for %s Customer Handles via ARIN." % name)
-            cleandata = []
-            fulldata = urllib.urlopen("http://whois.arin.net/rest/customers;name=%s*" % orghtml)
-            for line in fulldata:
-                fulldata = line.split("<")
-                for xline in fulldata:
-                    if "/rest/customer/" in xline:
-                        cleandata.append(xline)
-            if cleandata:
+
+            if customeritems:
                 if self.verbose:
                     print("\t[+] Found Customer Handles for %s." % name)
-                self.pool.map(self.custsearch, cleandata)
+                for customeritem in customeritems:
+                    self.custsearch(customeritem)
             else:
                 if self.verbose:
                     print("\t[-] No Customer Handles found for %s." % name)
@@ -740,107 +895,13 @@ class ARIN:
             if self.verbose:
                 print("[*] Enumerating CIDRs for %s ASNs via ARIN." % name)
             if self.asns:
+                self.asns = sorted(set(self.asns))
                 if self.verbose:
                     print("\t[+] Found ASN Records for %s." % name)
-                asndata = []
-                asn = None
-                asnnum = None
-                org = None
-                netname = None
-                email = None
-                url = "http://bgp.he.net/${asn}#_asinfo"
-
-                for asnlink in self.asns:
-                    fulldata = urllib.urlopen(asnlink)
-                    for data in fulldata:
-                        asndata = data.split("<")
-                    for data in asndata:
-                        if 'handle>AS' in data:
-                            asn = data.split(">")[1]
-                            asnnum = asn[2:]
-                        if 'orgRef handle' in data:
-                            org = data.split('"')[3]
-
-                    try:
-                        tn = telnetlib.Telnet(random.choice(self.routesrvs), '23', timeout=10)
-                        tn.write("show ip bgp regexp %s\n" % asnnum)
-                        tn.write("\n")
-                        tn.write("\n")
-                        tn.write("exit\n")
-                        telnetdata = tn.read_all().split()
-                        tn.close()
-                        time.sleep(2)
-                        ranges = []
-                        for ipadd in telnetdata:
-                            if re.match(r"^([0-9]{1,3}\.){3}[0-9]{1,3}\/([0-9]|[1-2][0-9]|3[0-2])?$",
-                                        ipadd) or re.match(
-                                    r"^i([0-9]{1,3}\.){3}[0-9]{1,3}\/([0-9]|[1-2][0-9]|3[0-2])?$", ipadd):
-                                if 'i' in ipadd:
-                                    ranges.append(ipadd[1:])
-                                else:
-                                    ranges.append(ipadd)
-
-                        if ranges:
-                            # get cidrs for each network
-                            for cidradd in ranges:
-                                cidr = cidradd
-                                inetnum = str(IPNetwork(cidr).network) + " - " + str(IPNetwork(cidr).broadcast)
-                                asnhtml = asn.replace(' ', '%20').replace('-', '%2D').replace(',', '%2C').replace(
-                                    '.', '%2E').replace('&', '%26')
-                                asnurl = url.replace("${asn}", asnhtml)
-
-                                dictentry = BuildResultDict(cidr, inetnum, org, netname, asnurl, self.country, self.rir,
-                                                            email, self.verbose)
-                                dictentry.build()
-                    except (socket.timeout, socket.error):
-                        if self.verbose:
-                            screenlock.acquire()
-                            print("\t[!] Connection timed out or refused for ASN %s. Skipping." % asn)
-                            screenlock.release()
-                        pass
-
+                self.pool.map(self.asnlinklookup, self.asns)
             else:
                 if self.verbose:
                     print("[-] No ASN Records found for %s." % name)
-
-
-class BuildResultDict:
-    def __init__(self, cidr, inet, org, netname, inetnumurl, country, rir, email, verbose):
-        self.cidr = cidr
-        self.inet = inet
-        self.org = org
-        self.netname = netname
-        self.inetnumurl = inetnumurl
-        self.country = country
-        self.rir = rir
-        self.email = email
-        self.verbose = verbose
-
-    def build(self):
-        exists = False
-        for iprange in combined_whoisresults.keys():
-            if IPNetwork(self.cidr) in IPNetwork(iprange):
-                exists = True
-
-        if self.email:
-            if self.cidr in combined_whoisresults.keys():
-                combined_whoisresults[self.cidr]["email"] = self.email
-
-        if not exists:
-            combined_whoisresults[self.cidr] = {}
-            combined_whoisresults[self.cidr]["range"] = self.inet
-            combined_whoisresults[self.cidr]["org"] = self.org
-            combined_whoisresults[self.cidr]["netname"] = self.netname
-            combined_whoisresults[self.cidr]["inetnumurl"] = self.inetnumurl
-            combined_whoisresults[self.cidr]["country"] = self.country
-            combined_whoisresults[self.cidr]["rir"] = self.rir
-            if self.email:
-                combined_whoisresults[self.cidr]["email"] = self.email
-            else:
-                combined_whoisresults[self.cidr]["email"] = ""
-        else:
-            if self.verbose:
-                print("[!] %s already exists in the data dictionary." % self.cidr)
 
 
 class CSVout:
@@ -863,7 +924,7 @@ class CSVout:
         self.f = None
 
     def quote(self, value):
-        if not isinstance(value, str) or not isinstance(value, unicode):
+        if not isinstance(value, str):
             value = str(value)
         return self.QUOTE + value + self.QUOTE
 
@@ -871,28 +932,30 @@ class CSVout:
         return self.sep.join([self.quote(value) for value in row])
 
     def write(self):
-        self.csvlinewrite(['IP Range', 'CIDR', 'Organization|Customer', 'Network Name', 'Country', 'RIR Database', 'URL', "Associated Email"])
+        self.csvlinewrite(
+            ['IP Range', 'CIDR', 'Organization|Customer', 'Network Name', 'Country', 'RIR Database', 'URL',
+             "Associated Email"])
         for cidr in combined_whoisresults:
-            row = [combined_whoisresults[cidr]["range"], cidr, combined_whoisresults[cidr]["org"], combined_whoisresults[cidr]["netname"], combined_whoisresults[cidr]["country"], combined_whoisresults[cidr]["rir"], combined_whoisresults[cidr]["inetnumurl"], combined_whoisresults[cidr]["email"]]
+            row = [combined_whoisresults[cidr]["range"], cidr, combined_whoisresults[cidr]["org"],
+                   combined_whoisresults[cidr]["netname"], combined_whoisresults[cidr]["country"],
+                   combined_whoisresults[cidr]["rir"], combined_whoisresults[cidr]["inetnumurl"],
+                   combined_whoisresults[cidr]["email"]]
             self.csvlinewrite(row)
         self.closecsv()
         if self.verbose:
             print('[%s] Created %s' % ('*', self.filename))
 
+
 class Main:
-    def __init__(self, verbose, output, threads, updatelacnicdb, ripe, lacnic, afrinic, apnic, arin):
-        self.routeservers = ['64.62.142.154',  # Hurricane Electric: route-server.he.net
-                             '203.178.141.138',  # TELXATL: route-views.telxatl.routeviews.org
-                             '207.162.219.54']  # NWAX: route-views.nwax.routeviews.org
-        self.datafile = "lacnicdb.txt"
-        self.datafilebu = "lacnicdb.txt.bu"
-        self.uagent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2227.0 Safari/537.36"
+    def __init__(self, verbosity, output, threads, updatelacnicdb, ripe, lacnic, afrinic, apnic, arin):
+        self.verbose = verbosity
         self.clientname = []
         self.cemaildomain = ""
         self.countrycodeopts = []
         self.cfolder = ""
+        self.datafile = "lacnicdb.txt"
+        self.datafilebu = "lacnicdb.txt.bu"
 
-        self.verbose = verbose
         self.output = output
         self.updatelacnicdb = updatelacnicdb
         self.ripe = ripe
@@ -901,6 +964,20 @@ class Main:
         self.apnic = apnic
         self.arin = arin
         self.threadpool = threads
+
+        routeserverhostnames = ["route-server.he.net",  # Hurricane Electric
+                                "route-views.nwax.routeviews.org",  # Route-Views NWAX
+                                "route-views.chicago.routeviews.org",  # Route-Views Chicago
+                                "route-views.sfmix.routeviews.org",  # Route-Views SanFrancisco
+                                "route-server.eastlink.ca"]  # Eastlink
+        self.routeservers = []
+        for routeserverhostname in routeserverhostnames:
+            try:
+                rs = socket.gethostbyname(routeserverhostname)
+                self.routeservers.append(rs)
+            except:
+                if self.verbose:
+                    print("[-] An IP address for route server %s could not be resolved" % routeserverhostname)
 
     def run(self):
         # Check if the update LACNIC DB option was chosen and run updater if the user didn't mess up and pick
@@ -925,7 +1002,7 @@ class Main:
 
         # Get client name
         while True:
-            choice = raw_input("Enter Client Name: ")
+            choice = input("Enter Client Name: ")
             if choice.lower() == '':
                 print("Client name is empty, please try again.")
             else:
@@ -949,41 +1026,44 @@ class Main:
                 break
 
         while True:
-            choice = raw_input("Does %s use any other alternative names? (i.e. Microsoft, MS) Y or N: " % self.clientname[0])
+            choice = input(
+                "Does %s use any other alternative names? (i.e. Microsoft, MS) Y or N: " % self.clientname[0])
             if choice.lower() != 'y' and choice.lower() != 'n' and choice.lower() != 'yes' and choice.lower() != 'no':
                 print("[!] Please choose Y or N.")
             else:
                 if choice.lower() == 'y':
                     choice = ''
                     while True:
-                        choice = raw_input(
+                        choice = input(
                             "Please enter alternative client name for %s: " % self.clientname[0])
                         if choice.lower() == '':
                             print("Client name is empty, please try again.")
                         else:
                             # Check for names containing '&' or 'and' or space to search for both instances
                             if '&' in choice:
-                                print("[*] Client name contains an '&'. We will search for name with 'and' also.")
+                                print(
+                                    "[*] Client name contains an '&'. We will search for name with 'and' also.")
                                 self.clientname.append(choice)
                                 self.clientname.append(choice.replace("&", "and"))
                             elif 'and' in choice:
-                                print("[*] Client name contains an 'and'. We will search for name with '&' also.")
+                                print(
+                                    "[*] Client name contains an 'and'. We will search for name with '&' also.")
                                 self.clientname.append(choice)
                                 self.clientname.append(choice.replace("and", "&"))
                             else:
                                 self.clientname.append(choice)
                             if ' ' in choice:
-                                print("[*] Client name contains a space. We will search for name without spaces also.")
+                                print(
+                                    "[*] Client name contains a space. We will search for name without spaces also.")
                                 self.clientname.append(choice)
                                 self.clientname.append(''.join(choice.split()))
                         break
                 else:
                     break
 
-
         # Get client email domain
         while True:
-            choice = raw_input("Enter Client Email Domain: ")
+            choice = input("Enter Client Email Domain: ")
             if choice.lower() == '':
                 print("[!] Client email domain is empty, please try again.")
             elif not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9-\.]{0,61}[a-zA-Z0-9]\.[a-zA-Z]{0,3}$", choice):
@@ -996,7 +1076,7 @@ class Main:
 
         # Check if country codes are used in email address
         while True:
-            choice = raw_input("Does %s use country codes in email addresses? Y or N: " % self.cemaildomain)
+            choice = input("Does %s use country codes in email addresses? Y or N: " % self.cemaildomain)
             if choice.lower() != 'y' and choice.lower() != 'n' and choice.lower() != 'yes' and choice.lower() != 'no':
                 print("[!] Please choose Y or N.")
             else:
@@ -1005,7 +1085,7 @@ class Main:
                     choice = ''
                     # Check country code position in email address
                     while True:
-                        choice = raw_input(
+                        choice = input(
                             "Are country codes before (B) or after (A) the domain name %s? B or A:" % self.cemaildomain)
                         if choice.lower() != 'a' and choice.lower() != 'b' and choice.lower() != 'before' and choice.lower() != 'after':
                             print("[!] Please choose B or A.")
@@ -1020,26 +1100,35 @@ class Main:
         if self.arin:
             if self.verbose:
                 print("[*] Running ARIN queries.")
-            arin = ARIN(self.verbose, self.threadpool, self.clientname, self.cemaildomain, self.countrycodeopts, self.routeservers)
-            arin.run()
+
+            arin = ARIN(self.verbose, self.threadpool, self.clientname, self.cemaildomain, self.countrycodeopts,
+                        self.routeservers)
             arin.runemails()
+            arin.run()
+            # Wait for threads to finish up
+            time.sleep(4)
 
         if self.ripe:
             if self.verbose:
                 print("[*] Running RIPE queries.")
             ripe = RIPE(self.verbose, self.threadpool, self.clientname)
             ripe.run()
+            # Wait for threads to finish up
+            time.sleep(4)
 
         if self.apnic:
             if self.verbose:
                 print("[*] Running APNIC queries.")
             apnic = APNIC(self.verbose, self.threadpool, self.clientname, self.cemaildomain)
             apnic.run()
+            # Wait for threads to finish up
+            time.sleep(4)
 
         if self.lacnic:
             if self.verbose:
                 print("[*] Running LACNIC queries.")
-            lacnic = LACNIC(self.verbose, self.threadpool, self.clientname, self.cemaildomain, self.routeservers, self.datafile)
+            lacnic = LACNIC(self.verbose, self.threadpool, self.clientname, self.cemaildomain, self.routeservers,
+                            self.datafile)
             lacnic.run()
 
         if self.afrinic:
@@ -1048,13 +1137,42 @@ class Main:
             afrinic = AfriNIC(self.verbose, self.threadpool, self.clientname, self.cemaildomain)
             afrinic.run()
 
-        # print(combined_whoisresults)
         if self.verbose:
             print("[+] Lookup complete!")
+
         if self.output:
             output = CSVout(self.cfolder, self.verbose)
             output.write()
+            print("[+] Output written to: %s" % self.cfolder)
         return combined_whoisresults, self.cemaildomain
+
+    def banner(self):
+        print("""
+        .ed'''''' "^^^^**mu__
+      -"                  ""*m__
+    ."             mwu___      "Ns
+   /               ug___"9*u_     "q_
+  d  3             ,___"9*u_"9w_    "u_
+  $  *             ,__"^m,_"*s_"q_    9_
+ .$  ^c            __"9*,_"N_ 9u "s    "M
+ d$L  4.           ''^m__"q_"*_ 4_ b    `L
+ $$$$b ^ceeeee.    "*u_ 9u "s ?p 0_ b    9p
+ $$$$P d$$$$F $ $  *u_"*_ 0_`k 9p # `L    #
+ 3$$$F "$$$$b   $  s 5p 0  # 7p # ]r #    0
+  $$P"  "$$b   .$  `  B jF 0 jF 0 jF 0    t  Pacifist Toolkit
+   *c    ..    $$     " d  @ jL # jL #    d  pwhois.py
+     %ce""    $$$  m    " d _@ jF 0 jF    0  Jesse Nebling (@bashexplode)
+      *$e.    ***  jm*      # jF g" 0    jF
+       $$$      4  __a*" _    " J" 0     @
+      $"'$=e....$  "__a*^"_s   " jP    _0
+      $  *=%4.$ L  ""__a*@"_w-        j@
+      $   "%*ebJL  '''__a*^"_a*     _p"
+       %..      4  ^^''__m*"     _y"
+        $$$e   z$  e*^F""      __*"
+         "*$c  "$          __a*"
+           '''*$$______aw*^''
+           """
+              )
 
 
 if __name__ == "__main__":
@@ -1076,14 +1194,18 @@ if __name__ == "__main__":
                         help='Query All RIR databases')
     parser.add_argument('-u', '--updatelacnicdb', default=False, action='store_true',
                         help='Update LACNIC database')
-    # parser.add_argument('-o' '--outputfile', default=False, action='store_true', help='Creates .csv of results')
     parser.add_argument('-T', '--threads', default=1, help='Specify how many threads to use. [Default = 1]')
+    # parser.add_argument('-q', '--query', default=False, help='whois query')
+    # parser.add_argument('-d', '--emaildomain', default=False, help='email domain')
 
     args = parser.parse_args()
     if not (args.ripe or args.lacnic or args.afrinic or args.apnic or args.arin or args.all):
         parser.error('[!] Please select a RIR database with -r (RIPE), -l (LACNIC), -f (AfriNIC), -p (APNIC), '
                      '-a (ARIN), or all with -A.')
         sys.exit()
+
+    if args.verbose:
+        verbose = True
 
     if args.all:
         ripe = True
@@ -1101,7 +1223,9 @@ if __name__ == "__main__":
     tpool = ThreadPool(int(args.threads))
     try:
         go = Main(args.verbose, output, tpool, args.updatelacnicdb, ripe, lacnic, afrinic, apnic, arin)
+        go.banner()
         go.run()
+
     except KeyboardInterrupt:
         print("[!] Caught ctrl+c, aborting . . . ")
         sys.exit()

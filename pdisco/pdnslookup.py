@@ -18,19 +18,43 @@ class DNSLookup:
         self.hosts = hosts
         self.verbose = verbose
         self.threadpool = threadpool
+        self.hostlist = []
 
     def lookup(self, host):
-        try:
-            ipaddr = socket.gethostbyname(host)
-            if __name__ == "__main__":
-                print(host + " : " + ipaddr)
-            dictionarybuilder = BuildResultDict(host, ipaddr, self.verbose)
-            dictionarybuilder.build()
-        except socket.gaierror:
-            if self.verbose:
-                screenlock.acquire()
-                print("[!] No IP Address associated with %s." % host)
-                screenlock.release()
+
+            # Splitting out for sublist3r output
+            if '<BR>' in host:
+                for hostitem in host.split('<BR>'):
+                    if hostitem.lower() not in self.hostlist:
+                        self.hostlist.append(hostitem.lower())
+                        try:
+                            ipaddr = socket.gethostbyname(hostitem)
+                            if __name__ == "__main__":
+                                print(hostitem + " : " + ipaddr)
+                            dictionarybuilder = BuildResultDict(hostitem, ipaddr, self.verbose)
+                            dictionarybuilder.build()
+                        except UnicodeError:
+                            print("[!] Unicode error for %s" % hostitem)
+                        except socket.gaierror:
+                            if self.verbose:
+                                screenlock.acquire()
+                                print("[!] No IP Address associated with %s" % hostitem)
+                                screenlock.release()
+            else:
+                try:
+                    if host.lower() not in self.hostlist:
+                        ipaddr = socket.gethostbyname(host)
+                        if __name__ == "__main__":
+                            print(host + " : " + ipaddr)
+                        dictionarybuilder = BuildResultDict(host, ipaddr, self.verbose)
+                        dictionarybuilder.build()
+                except UnicodeError:
+                    print("[!] Unicode error for %s" % host)
+                except socket.gaierror:
+                    if self.verbose:
+                        screenlock.acquire()
+                        print("[!] No IP Address associated with %s" % host)
+                        screenlock.release()
 
     def execute(self):
         if self.hosts:
@@ -41,6 +65,34 @@ class DNSLookup:
                 screenlock.acquire()
                 print ("[!] Host(s) not provided!")
                 screenlock.release()
+
+    def banner(self):
+        print("""
+           .ed'''''' "^^^^**mu__
+         -"                  ""*m__
+       ."             mwu___      "Ns
+      /               ug___"9*u_     "q_
+     d  3             ,___"9*u_"9w_    "u_
+     $  *             ,__"^m,_"*s_"q_    9_
+    .$  ^c            __"9*,_"N_ 9u "s    "M
+    d$L  4.           ''^m__"q_"*_ 4_ b    `L
+    $$$$b ^ceeeee.    "*u_ 9u "s ?p 0_ b    9p
+    $$$$P d$$$$F $ $  *u_"*_ 0_`k 9p # `L    #
+    3$$$F "$$$$b   $  s 5p 0  # 7p # ]r #    0
+     $$P"  "$$b   .$  `  B jF 0 jF 0 jF 0    t  Pacifist Toolkit
+      *c    ..    $$     " d  @ jL # jL #    d  pdnslookup.py
+        %ce""    $$$  m    " d _@ jF 0 jF    0  Jesse Nebling (@bashexplode)
+         *$e.    ***  jm*      # jF g" 0    jF
+          $$$      4  __a*" _    " J" 0     @
+         $"'$=e....$  "__a*^"_s   " jP    _0
+         $  *=%4.$ L  ""__a*@"_w-        j@
+         $   "%*ebJL  '''__a*^"_a*     _p"
+          %..      4  ^^''__m*"     _y"
+           $$$e   z$  e*^F""      __*"
+            "*$c  "$          __a*"
+              '''*$$______aw*^''
+              """
+              )
 
 class BuildResultDict:
     def __init__(self, subdomain, ip, verbose):
@@ -83,6 +135,7 @@ if __name__ == "__main__":
             host.append(line.rstrip())
         # print(host)
     action = DNSLookup(host, args.verbose, pool)
+    action.banner()
     action.execute()
 
     print(dnslookups_results)

@@ -4,25 +4,19 @@
 from __future__ import print_function
 import argparse
 import sublist3r
-import hardCIDR
+import pwhois
 import pdnslookup
 import sys
 from multiprocessing.dummy import Pool as ThreadPool
 import threading
-import subprocess
 from netaddr import *
 import xlsxwriter
 import socket
+import whois
+import time
+import re
 
 screenlock = threading.Semaphore(value=1)
-
-def cmdline(command):  # was annoyed at os.system output so pulled this
-    process = subprocess.Popen(
-        args=command,
-        stdout=subprocess.PIPE,
-        shell=True
-    )
-    return process.communicate()[0]
 
 class excelwriter:
     def __init__(self, whoisdata, subdata, client):
@@ -177,11 +171,32 @@ class Main:
         self.apnic = apnic
         self.arin = arin
 
+    def whoistrycatch(self, query, whoisurl):
+        whoisclient = whois.NICClient()
+        try:
+            whoisdata = whoisclient.whois(query, whoisurl, 0).split('\n')
+            return whoisdata
+        except (ConnectionResetError, socket.timeout, socket.error):
+            try:
+                time.sleep(5)
+                whoisdata = whoisclient.whois(query, whoisurl, 0).split('\n')
+                return whoisdata
+            except (ConnectionResetError, socket.timeout, socket.error):
+                try:
+                    time.sleep(5)
+                    whoisdata = whoisclient.whois(query, whoisurl, 0).split('\n')
+                    return whoisdata
+                except (ConnectionResetError, socket.timeout, socket.error):
+                    print("[!] Failed whois connection 3 times, sorry")
+
     def pullwhoisdb(self, host):
         db = "ARIN"
         ip = self.dnslookups[host]["ip"]
-        fullwhoisdata = cmdline(
-            "whois -h whois.arin.net '%s' | grep -v '%s' | sed 1,4d | sed '$d'" % (ip, '%')).split('\n')
+        fullwhoisdata = []
+        whoisdata = self.whoistrycatch(ip, "whois.arin.net")
+        for line in whoisdata:
+            if line and not re.match('^%', line):
+                fullwhoisdata.append(line)
         if 'Network is unreachable' in fullwhoisdata or 'No route to host' in fullwhoisdata:
             if self.verbose:
                 screenlock.acquire()
@@ -208,7 +223,7 @@ class Main:
 
     def run(self):
         print("[*] Initiating whois lookup.")
-        whoisexec = hardCIDR.Main(self.verbose, False, self.pool, self.updatelacnicdb, self.ripe, self.lacnic, self.afrinic, self.apnic, self.arin)
+        whoisexec = pwhois.Main(self.verbose, False, self.pool, self.updatelacnicdb, self.ripe, self.lacnic, self.afrinic, self.apnic, self.arin)
         self.whoisdata, domain = whoisexec.run()
         clientname = domain.split('.')[0]
         print("[+] Completed whois lookup for %s." % clientname.title())
@@ -237,6 +252,34 @@ class Main:
 
         output = excelwriter(self.whoisdata, self.dnslookups, clientname)
         output.create()
+
+    def banner(self):
+        print("""
+           .ed'''''' "^^^^**mu__
+         -"                  ""*m__
+       ."             mwu___      "Ns
+      /               ug___"9*u_     "q_
+     d  3             ,___"9*u_"9w_    "u_
+     $  *             ,__"^m,_"*s_"q_    9_
+    .$  ^c            __"9*,_"N_ 9u "s    "M
+    d$L  4.           ''^m__"q_"*_ 4_ b    `L
+    $$$$b ^ceeeee.    "*u_ 9u "s ?p 0_ b    9p
+    $$$$P d$$$$F $ $  *u_"*_ 0_`k 9p # `L    #
+    3$$$F "$$$$b   $  s 5p 0  # 7p # ]r #    0
+     $$P"  "$$b   .$  `  B jF 0 jF 0 jF 0    t  Pacifist Toolkit
+      *c    ..    $$     " d  @ jL # jL #    d  pdisco.py
+        %ce""    $$$  m    " d _@ jF 0 jF    0  Jesse Nebling (@bashexplode)
+         *$e.    ***  jm*      # jF g" 0    jF
+          $$$      4  __a*" _    " J" 0     @
+         $"'$=e....$  "__a*^"_s   " jP    _0
+         $  *=%4.$ L  ""__a*@"_w-        j@
+         $   "%*ebJL  '''__a*^"_a*     _p"
+          %..      4  ^^''__m*"     _y"
+           $$$e   z$  e*^F""      __*"
+            "*$c  "$          __a*"
+              '''*$$______aw*^''
+              """
+              )
 
 
 if __name__ == "__main__":
@@ -281,6 +324,7 @@ if __name__ == "__main__":
             arin = args.arin
 
         go = Main(args.verbose, args.threads, args.updatelacnicdb, ripe, lacnic, afrinic, apnic, arin)
+        go.banner()
         go.run()
     except KeyboardInterrupt:
         print("[!] Caught ctrl+c, aborting . . . ")
