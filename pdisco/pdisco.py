@@ -103,10 +103,21 @@ class excelwriter:
 
         # Footprint data table maths
         datarow = 6
-        whoisdatarowtotal = len(self.whoisdata)
+        try:
+            whoisdatarowtotal = len(self.whoisdata)
+        except (TypeError):
+            whoisdatarowtotal = 0
+            pass
+
         subdomaintablerowstart = datarow + whoisdatarowtotal + 2
         subdomaindatastart = subdomaintablerowstart + 2
-        subdomainrowtotal = len(self.subdomaindata)
+
+        try:
+            subdomainrowtotal = len(self.subdomaindata)
+        except (TypeError):
+            subdomainrowtotal = 0
+            pass
+
         missingtablerowstart = subdomaindatastart + subdomainrowtotal + 3
 
         footprint.write(subdomaintablerowstart, 0, 'X', boldcenterwrapred)
@@ -239,19 +250,28 @@ class Main:
         print("[*] Performing DNS lookup on subdomains discovered.")
         subdnslookup = pdnslookup.DNSLookup(subdomains, self.verbose, self.pool)
         self.dnslookups = subdnslookup.execute()
+        if self.dnslookups is None:
+            self.dnslookups = {}
         print("[+] Completed DNS lookups.")
 
         print("[*] Discovering whois data for subdomains and correlating with previously obtained whois data.")
-        for host in self.dnslookups.keys():
-            for cidr in self.whoisdata.keys():
-                if IPAddress(self.dnslookups[host]["ip"]) in IPNetwork(cidr):
-                    self.dnslookups[host]["inranges"] = "Yes - " + cidr
-                    self.dnslookups[host]["rir"] = self.whoisdata[cidr]["rir"]
-        self.pool.map(self.pullwhoisdb, self.dnslookups.keys())
-        print("[+] Completed data correlation and additional whois lookups.")
+        try:
+            for host in self.dnslookups.keys():
+                for cidr in self.whoisdata.keys():
+                    if IPAddress(self.dnslookups[host]["ip"]) in IPNetwork(cidr):
+                        self.dnslookups[host]["inranges"] = "Yes - " + cidr
+                        self.dnslookups[host]["rir"] = self.whoisdata[cidr]["rir"]
+            self.pool.map(self.pullwhoisdb, self.dnslookups.keys())
+            print("[+] Completed data correlation and additional whois lookups.")
+        except(AttributeError):
+            pass
 
-        output = excelwriter(self.whoisdata, self.dnslookups, clientname)
-        output.create()
+        if len(self.whoisdata) == 0 and len(self.dnslookups) == 0:
+            print("[!] No domain data was discovered")
+        else:
+            output = excelwriter(self.whoisdata, self.dnslookups, clientname)
+            output.create()
+
 
     def banner(self):
         print("""
